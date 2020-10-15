@@ -29,8 +29,8 @@ import edp.core.exception.SourceException;
 import edp.core.model.*;
 import edp.davinci.core.enums.LogNameEnum;
 import edp.davinci.core.enums.SqlColumnEnum;
+import edp.davinci.core.utils.SourcePasswordEncryptUtils;
 import edp.davinci.core.utils.SqlParseUtils;
-import edp.davinci.model.Source;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.sf.jsqlparser.JSQLParserException;
@@ -94,11 +94,13 @@ public class SqlUtils {
     private SourceUtils sourceUtils;
 
     public SqlUtils init(BaseSource source) {
+        // Password decryption
+        String decrypt = SourcePasswordEncryptUtils.decrypt(source.getPassword());
         return SqlUtilsBuilder
                 .getBuilder()
                 .withJdbcUrl(source.getJdbcUrl())
                 .withUsername(source.getUsername())
-                .withPassword(source.getPassword())
+                .withPassword(decrypt)
                 .withDbVersion(source.getDbVersion())
                 .withProperties(source.getProperties())
                 .withIsExt(source.isExt())
@@ -109,11 +111,13 @@ public class SqlUtils {
     }
 
     public SqlUtils init(String jdbcUrl, String username, String password, String dbVersion, List<Dict> properties, boolean ext) {
+        // Password decryption
+        String decrypt = SourcePasswordEncryptUtils.decrypt(password);
         return SqlUtilsBuilder
                 .getBuilder()
                 .withJdbcUrl(jdbcUrl)
                 .withUsername(username)
-                .withPassword(password)
+                .withPassword(decrypt)
                 .withDbVersion(dbVersion)
                 .withProperties(properties)
                 .withIsExt(ext)
@@ -185,14 +189,11 @@ public class SqlUtils {
 
         JdbcTemplate jdbcTemplate = jdbcTemplate();
         jdbcTemplate.setMaxRows(resultLimit);
-
         if (pageNo < 1 && pageSize < 1) {
 
             if (limit > 0) {
-                resultLimit = limit > resultLimit ? resultLimit : limit;
+                jdbcTemplate.setMaxRows(Math.min(limit, resultLimit));
             }
-
-            jdbcTemplate.setMaxRows(resultLimit);
 
             // special for mysql
             if (getDataTypeEnum() == DataTypeEnum.MYSQL) {
@@ -217,18 +218,22 @@ public class SqlUtils {
             }
 
             if (limit > 0) {
-                limit = limit > resultLimit ? resultLimit : limit;
-                totalCount = Math.min(limit, totalCount);
+                totalCount = Math.min(Math.min(limit, resultLimit), totalCount);
+                if (limit < pageNo * pageSize) {
+                    jdbcTemplate.setMaxRows(limit - startRow);
+                } else {
+                    jdbcTemplate.setMaxRows(Math.min(limit, pageSize));
+                }
+            } else {
+                jdbcTemplate.setMaxRows(pageNo * pageSize);
             }
 
             paginateWithQueryColumns.setTotalCount(totalCount);
-            int maxRows = limit > 0 && limit < pageSize * pageNo ? limit : pageSize * pageNo;
 
             if (this.dataTypeEnum == MYSQL) {
                 sql = sql + " LIMIT " + startRow + ", " + pageSize;
                 getResultForPaginate(sql, paginateWithQueryColumns, jdbcTemplate, excludeColumns, -1);
             } else {
-                jdbcTemplate.setMaxRows(maxRows);
                 getResultForPaginate(sql, paginateWithQueryColumns, jdbcTemplate, excludeColumns, startRow);
             }
         }
@@ -1046,7 +1051,12 @@ public class SqlUtils {
     }
 
     public static String formatSql(String sql) {
-        return SQLUtils.formatMySql(sql);
+        try {
+            return SQLUtils.formatMySql(sql);
+        } catch (Exception e) {
+            // ignore
+        }
+        return sql;
     }
 }
 
